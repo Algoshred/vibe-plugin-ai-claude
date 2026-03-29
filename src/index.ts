@@ -202,8 +202,28 @@ class ClaudeProvider implements AIAgentProvider {
   }
 
   async createSession(config: AISessionConfig): Promise<AISession> {
-    const id = crypto.randomUUID();
+    // Accept sessionId from orchestrator (e.g., when re-creating after restart)
+    const id =
+      (config.providerConfig?.sessionId as string) || crypto.randomUUID();
     const now = new Date().toISOString();
+
+    // If session already exists in memory, just return it
+    const existing = this.sessions.get(id);
+    if (existing) {
+      existing.status = "active";
+      existing.updatedAt = now;
+      return {
+        id,
+        name: existing.config.name,
+        status: "active",
+        agentType: existing.config.agentType,
+        provider: PROVIDER_NAME,
+        config: existing.config,
+        stats: existing.stats,
+        createdAt: existing.createdAt,
+        updatedAt: now,
+      };
+    }
 
     const session: ManagedSession = {
       id,
