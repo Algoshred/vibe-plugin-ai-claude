@@ -23,9 +23,12 @@
     "clean": "rimraf dist",
     "prebuild": "bun run clean",
     "prepublishOnly": "bun run build",
-    "sanity": "bun run format:check && bun run lint && bun run type:check && bun run build"
+    "test": "bun test",
+    "sanity": "bun run format:check && bun run lint && bun run type:check && bun run build && bun run test"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0"
+  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^22.0.0",
