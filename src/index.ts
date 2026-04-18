@@ -76,7 +76,9 @@ interface HostServices {
   serviceRegistry?: {
     getService: <T>(pluginName: string, serviceName: string) => T | undefined;
   };
-  getConfig: (key: string) => string | undefined;
+  getConfig: (
+    key: string,
+  ) => string | undefined | Promise<string | undefined>;
 }
 
 type AISessionStatus =
@@ -319,25 +321,44 @@ interface AnthropicStream {
   finalMessage(): Promise<AnthropicResponse>;
 }
 
+type ApiKeyResolver = () => Promise<string | undefined>;
+
 class ClaudeSdkAdapter implements ProviderAdapter {
   readonly mode: ProviderMode = "sdk";
   private client: AnthropicClient | null = null;
+  private resolveApiKey: ApiKeyResolver;
+
+  constructor(resolveApiKey: ApiKeyResolver) {
+    this.resolveApiKey = resolveApiKey;
+  }
 
   private async getClient(): Promise<AnthropicClient> {
     if (this.client) return this.client;
 
+    const apiKey = await this.resolveApiKey();
+    if (!apiKey) {
+      throw new Error(
+        "ANTHROPIC_API_KEY is not configured. Set the env var, or store it " +
+          "under the 'ANTHROPIC_API_KEY' agent config key " +
+          "(e.g. POST /api/config { key: 'ANTHROPIC_API_KEY', value: '...' }).",
+      );
+    }
+
+    let mod: unknown;
     try {
-      const mod = await import("@anthropic-ai/sdk");
-      const Anthropic = mod.default ?? mod;
-      this.client = new Anthropic({
-        apiKey: process.env["ANTHROPIC_API_KEY"],
-      }) as unknown as AnthropicClient;
-      return this.client;
+      mod = await import("@anthropic-ai/sdk");
     } catch {
       throw new Error(
         "Failed to load @anthropic-ai/sdk. Install it with: bun add @anthropic-ai/sdk",
       );
     }
+
+    const m = mod as { default?: unknown };
+    const Anthropic = (m.default ?? mod) as new (opts: {
+      apiKey: string;
+    }) => AnthropicClient;
+    this.client = new Anthropic({ apiKey });
+    return this.client;
   }
 
   async sendPrompt(
@@ -587,11 +608,35 @@ class ClaudeProvider implements AIAgentProvider {
   private hostServices: HostServices | null = null;
   private activeMode: ProviderMode | null = null;
   private adapter: ProviderAdapter | null = null;
+  private cachedApiKey: string | undefined;
 
   setHostServices(hs: HostServices): void {
     this.hostServices = hs;
     this.logIngester =
       hs.serviceRegistry?.getService<LogIngester>("ai", "log-ingester") ?? null;
+
+    // Warm the cache so detectMode() can see a DB-stored key.
+    void Promise.resolve(hs.getConfig("ANTHROPIC_API_KEY"))
+      .then((v) => {
+        if (v) this.cachedApiKey = v;
+      })
+      .catch(() => {});
+  }
+
+  private async resolveApiKey(): Promise<string | undefined> {
+    const envKey = process.env["ANTHROPIC_API_KEY"];
+    if (envKey) return envKey;
+    if (this.cachedApiKey) return this.cachedApiKey;
+    if (this.hostServices) {
+      try {
+        const v = await this.hostServices.getConfig("ANTHROPIC_API_KEY");
+        if (v) this.cachedApiKey = v;
+        return v ?? undefined;
+      } catch {
+        return undefined;
+      }
+    }
+    return undefined;
   }
 
   // ── Mode Management ──────────────────────────────────────────────────
@@ -608,7 +653,7 @@ class ClaudeProvider implements AIAgentProvider {
   }
 
   private detectMode(): ProviderMode {
-    if (process.env["ANTHROPIC_API_KEY"]) return "sdk";
+    if (process.env["ANTHROPIC_API_KEY"] || this.cachedApiKey) return "sdk";
 
     try {
       const proc = Bun.spawnSync(["which", CLI_COMMAND], {
@@ -630,7 +675,9 @@ class ClaudeProvider implements AIAgentProvider {
 
     const mode = this.getMode();
     this.adapter =
-      mode === "sdk" ? new ClaudeSdkAdapter() : new ClaudeCliAdapter();
+      mode === "sdk"
+        ? new ClaudeSdkAdapter(() => this.resolveApiKey())
+        : new ClaudeCliAdapter();
     this.activeMode = mode;
     this.log("info", `Adapter initialized in ${mode} mode`);
     return this.adapter;
