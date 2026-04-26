@@ -321,26 +321,29 @@ interface AnthropicStream {
   finalMessage(): Promise<AnthropicResponse>;
 }
 
-type ApiKeyResolver = () => Promise<string | undefined>;
+type ClaudeAuth =
+  | { type: "apiKey"; value: string }
+  | { type: "authToken"; value: string };
+type ClaudeAuthResolver = () => Promise<ClaudeAuth | undefined>;
 
 class ClaudeSdkAdapter implements ProviderAdapter {
   readonly mode: ProviderMode = "sdk";
   private client: AnthropicClient | null = null;
-  private resolveApiKey: ApiKeyResolver;
+  private resolveAuth: ClaudeAuthResolver;
 
-  constructor(resolveApiKey: ApiKeyResolver) {
-    this.resolveApiKey = resolveApiKey;
+  constructor(resolveAuth: ClaudeAuthResolver) {
+    this.resolveAuth = resolveAuth;
   }
 
   private async getClient(): Promise<AnthropicClient> {
     if (this.client) return this.client;
 
-    const apiKey = await this.resolveApiKey();
-    if (!apiKey) {
+    const auth = await this.resolveAuth();
+    if (!auth) {
       throw new Error(
-        "ANTHROPIC_API_KEY is not configured. Set the env var, or store it " +
-          "under the 'ANTHROPIC_API_KEY' agent config key " +
-          "(e.g. POST /api/config { key: 'ANTHROPIC_API_KEY', value: '...' }).",
+        "Claude SDK auth is not configured. Set ANTHROPIC_API_KEY or " +
+          "ANTHROPIC_AUTH_TOKEN, or store either key in agent config " +
+          "(e.g. POST /api/config { key: 'ANTHROPIC_AUTH_TOKEN', value: '...' }).",
       );
     }
 
@@ -354,10 +357,13 @@ class ClaudeSdkAdapter implements ProviderAdapter {
     }
 
     const m = mod as { default?: unknown };
-    const Anthropic = (m.default ?? mod) as new (opts: {
-      apiKey: string;
-    }) => AnthropicClient;
-    this.client = new Anthropic({ apiKey });
+    const Anthropic = (m.default ?? mod) as new (opts:
+      | { apiKey: string }
+      | { authToken: string }
+    ) => AnthropicClient;
+    this.client = new Anthropic(
+      auth.type === "apiKey" ? { apiKey: auth.value } : { authToken: auth.value },
+    );
     return this.client;
   }
 
@@ -609,29 +615,52 @@ class ClaudeProvider implements AIAgentProvider {
   private activeMode: ProviderMode | null = null;
   private adapter: ProviderAdapter | null = null;
   private cachedApiKey: string | undefined;
+  private cachedAuthToken: string | undefined;
 
   setHostServices(hs: HostServices): void {
     this.hostServices = hs;
     this.logIngester =
       hs.serviceRegistry?.getService<LogIngester>("ai", "log-ingester") ?? null;
 
-    // Warm the cache so detectMode() can see a DB-stored key.
-    void Promise.resolve(hs.getConfig("ANTHROPIC_API_KEY"))
-      .then((v) => {
-        if (v) this.cachedApiKey = v;
+    // Warm the cache so detectMode() can see DB-stored credentials.
+    void Promise.all([
+      Promise.resolve(hs.getConfig("ANTHROPIC_API_KEY")),
+      Promise.resolve(hs.getConfig("ANTHROPIC_AUTH_TOKEN")),
+    ])
+      .then(([apiKey, authToken]) => {
+        const trimmedApiKey = apiKey?.trim();
+        const trimmedAuthToken = authToken?.trim();
+        if (trimmedApiKey) this.cachedApiKey = trimmedApiKey;
+        if (trimmedAuthToken) this.cachedAuthToken = trimmedAuthToken;
       })
       .catch(() => {});
   }
 
-  private async resolveApiKey(): Promise<string | undefined> {
-    const envKey = process.env["ANTHROPIC_API_KEY"];
-    if (envKey) return envKey;
-    if (this.cachedApiKey) return this.cachedApiKey;
+  private async resolveAuth(): Promise<ClaudeAuth | undefined> {
+    const envApiKey = process.env["ANTHROPIC_API_KEY"]?.trim();
+    if (envApiKey) return { type: "apiKey", value: envApiKey };
+
+    const envAuthToken = process.env["ANTHROPIC_AUTH_TOKEN"]?.trim();
+    if (envAuthToken) return { type: "authToken", value: envAuthToken };
+
+    if (this.cachedApiKey) return { type: "apiKey", value: this.cachedApiKey };
+    if (this.cachedAuthToken) {
+      return { type: "authToken", value: this.cachedAuthToken };
+    }
+
     if (this.hostServices) {
       try {
-        const v = await this.hostServices.getConfig("ANTHROPIC_API_KEY");
-        if (v) this.cachedApiKey = v;
-        return v ?? undefined;
+        const apiKey = (await this.hostServices.getConfig("ANTHROPIC_API_KEY"))?.trim();
+        if (apiKey) {
+          this.cachedApiKey = apiKey;
+          return { type: "apiKey", value: apiKey };
+        }
+
+        const authToken = (await this.hostServices.getConfig("ANTHROPIC_AUTH_TOKEN"))?.trim();
+        if (authToken) {
+          this.cachedAuthToken = authToken;
+          return { type: "authToken", value: authToken };
+        }
       } catch {
         return undefined;
       }
@@ -653,7 +682,14 @@ class ClaudeProvider implements AIAgentProvider {
   }
 
   private detectMode(): ProviderMode {
-    if (process.env["ANTHROPIC_API_KEY"] || this.cachedApiKey) return "sdk";
+    if (
+      process.env["ANTHROPIC_API_KEY"]?.trim() ||
+      process.env["ANTHROPIC_AUTH_TOKEN"]?.trim() ||
+      this.cachedApiKey ||
+      this.cachedAuthToken
+    ) {
+      return "sdk";
+    }
 
     try {
       const proc = Bun.spawnSync(["which", CLI_COMMAND], {
@@ -676,7 +712,7 @@ class ClaudeProvider implements AIAgentProvider {
     const mode = this.getMode();
     this.adapter =
       mode === "sdk"
-        ? new ClaudeSdkAdapter(() => this.resolveApiKey())
+        ? new ClaudeSdkAdapter(() => this.resolveAuth())
         : new ClaudeCliAdapter();
     this.activeMode = mode;
     this.log("info", `Adapter initialized in ${mode} mode`);
