@@ -1,6 +1,6 @@
 {
-  "name": "@vibecontrols/vibe-plugin-claude",
-  "version": "2026.428.1",
+  "name": "@vibecontrols/vibe-plugin-ai-claude",
+  "version": "2026.428.3",
   "type": "module",
   "main": "./dist/index.js",
   "description": "Claude Code AI agent provider for VibeControls Agent",
@@ -58,14 +58,14 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/algoshred/vibe-plugin-claude.git"
+    "url": "git+https://github.com/algoshred/vibe-plugin-ai-claude.git"
   },
   "bugs": {
-    "url": "https://github.com/algoshred/vibe-plugin-claude/issues"
+    "url": "https://github.com/algoshred/vibe-plugin-ai-claude/issues"
   },
   "homepage": "https://vibecontrols.com",
   "publishConfig": {
-    "access": "restricted",
+    "access": "public",
     "registry": "https://registry.npmjs.org/"
   },
   "files": [
