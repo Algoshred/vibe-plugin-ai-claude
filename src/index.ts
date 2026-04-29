@@ -10,6 +10,8 @@
  * binary is found, error if neither is available.
  */
 
+import { Elysia } from "elysia";
+
 // ── Locally Redeclared Interfaces ────────────────────────────────────────
 // (Avoid hard dependency on @vibecontrols/agent)
 
@@ -54,6 +56,13 @@ interface VibePlugin {
   >;
   cliCommand?: string;
   apiPrefix?: string;
+  prerequisites?: Array<{
+    name: string;
+    kind: "binary" | "npm" | "pip" | "cargo" | "manual";
+    requiresSudo: boolean;
+    description?: string;
+  }>;
+  createRoutes?: () => unknown;
   providers?: { ai?: AIAgentProvider; [key: string]: unknown };
   onServerStart?: (
     app: unknown,
@@ -76,9 +85,7 @@ interface HostServices {
   serviceRegistry?: {
     getService: <T>(pluginName: string, serviceName: string) => T | undefined;
   };
-  getConfig: (
-    key: string,
-  ) => string | undefined | Promise<string | undefined>;
+  getConfig: (key: string) => string | undefined | Promise<string | undefined>;
 }
 
 type AISessionStatus =
@@ -260,6 +267,14 @@ const CLI_COMMAND = "claude";
 const DISPLAY_NAME = "Claude";
 const DEFAULT_MODEL = "claude-sonnet-4-20250514";
 const DEFAULT_MAX_TOKENS = 8192;
+const API_PREFIX = `/api/ai-${PROVIDER_NAME}`;
+const SUPPORTED_MODES: ProviderMode[] = ["sdk", "cli"];
+const CLI_INSTALL_COMMAND = [
+  "npm",
+  "install",
+  "-g",
+  "@anthropic-ai/claude-code",
+];
 
 const CLAUDE_MODELS: AIModelInfo[] = [
   {
@@ -303,9 +318,7 @@ const CLAUDE_MODELS: AIModelInfo[] = [
 interface AnthropicClient {
   messages: {
     create(params: Record<string, unknown>): Promise<AnthropicResponse>;
-    stream(
-      params: Record<string, unknown>,
-    ): AnthropicStream;
+    stream(params: Record<string, unknown>): AnthropicStream;
   };
 }
 
@@ -357,12 +370,13 @@ class ClaudeSdkAdapter implements ProviderAdapter {
     }
 
     const m = mod as { default?: unknown };
-    const Anthropic = (m.default ?? mod) as new (opts:
-      | { apiKey: string }
-      | { authToken: string }
+    const Anthropic = (m.default ?? mod) as new (
+      opts: { apiKey: string } | { authToken: string },
     ) => AnthropicClient;
     this.client = new Anthropic(
-      auth.type === "apiKey" ? { apiKey: auth.value } : { authToken: auth.value },
+      auth.type === "apiKey"
+        ? { apiKey: auth.value }
+        : { authToken: auth.value },
     );
     return this.client;
   }
@@ -636,6 +650,18 @@ class ClaudeProvider implements AIAgentProvider {
       .catch(() => {});
   }
 
+  getSupportedModes(): ProviderMode[] {
+    return [...SUPPORTED_MODES];
+  }
+
+  getDisplayName(): string {
+    return DISPLAY_NAME;
+  }
+
+  getPrereqApiPrefix(): string {
+    return API_PREFIX;
+  }
+
   private async resolveAuth(): Promise<ClaudeAuth | undefined> {
     const envApiKey = process.env["ANTHROPIC_API_KEY"]?.trim();
     if (envApiKey) return { type: "apiKey", value: envApiKey };
@@ -650,13 +676,17 @@ class ClaudeProvider implements AIAgentProvider {
 
     if (this.hostServices) {
       try {
-        const apiKey = (await this.hostServices.getConfig("ANTHROPIC_API_KEY"))?.trim();
+        const apiKey = (
+          await this.hostServices.getConfig("ANTHROPIC_API_KEY")
+        )?.trim();
         if (apiKey) {
           this.cachedApiKey = apiKey;
           return { type: "apiKey", value: apiKey };
         }
 
-        const authToken = (await this.hostServices.getConfig("ANTHROPIC_AUTH_TOKEN"))?.trim();
+        const authToken = (
+          await this.hostServices.getConfig("ANTHROPIC_AUTH_TOKEN")
+        )?.trim();
         if (authToken) {
           this.cachedAuthToken = authToken;
           return { type: "authToken", value: authToken };
@@ -676,6 +706,9 @@ class ClaudeProvider implements AIAgentProvider {
   }
 
   setMode(mode: ProviderMode): void {
+    if (!SUPPORTED_MODES.includes(mode)) {
+      throw new Error(`${DISPLAY_NAME} does not support ${mode} mode`);
+    }
     this.activeMode = mode;
     this.adapter = null; // Force re-creation on next use
     this.log("info", `Mode explicitly set to: ${mode}`);
@@ -1088,6 +1121,77 @@ class ClaudeProvider implements AIAgentProvider {
 
 // ── Plugin Export ────────────────────────────────────────────────────────
 
+function getCliVersion(): string | null {
+  try {
+    const proc = Bun.spawnSync([CLI_COMMAND, "--version"], {
+      timeout: 5000,
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    if (proc.exitCode === 0) return proc.stdout.toString().trim();
+  } catch {
+    // Binary not found.
+  }
+  return null;
+}
+
+function createPrereqsRoutes() {
+  return new Elysia({ prefix: "/prereqs" })
+    .get("/status", () => {
+      const version = getCliVersion();
+      return {
+        satisfied: Boolean(version),
+        missing: version
+          ? []
+          : [
+              {
+                name: CLI_COMMAND,
+                kind: "npm" as const,
+                requiresSudo: false,
+                description: `${DISPLAY_NAME} CLI for CLI mode`,
+              },
+            ],
+      };
+    })
+    .post("/install", () => {
+      if (getCliVersion()) {
+        return {
+          ok: true,
+          installed: [CLI_COMMAND],
+          pendingSudo: [],
+          errors: [],
+        };
+      }
+
+      const proc = Bun.spawnSync(CLI_INSTALL_COMMAND, {
+        timeout: 120_000,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      if (proc.exitCode === 0) {
+        return {
+          ok: true,
+          installed: [CLI_COMMAND],
+          pendingSudo: [],
+          errors: [],
+        };
+      }
+      return {
+        ok: false,
+        installed: [],
+        pendingSudo: [],
+        errors: [
+          {
+            name: CLI_COMMAND,
+            message:
+              proc.stderr.toString().trim() ||
+              `Run manually: ${CLI_INSTALL_COMMAND.join(" ")}`,
+          },
+        ],
+      };
+    });
+}
+
 const provider = new ClaudeProvider();
 
 export const vibePlugin: VibePlugin = {
@@ -1096,7 +1200,17 @@ export const vibePlugin: VibePlugin = {
   description:
     "Claude AI agent provider for VibeControls (dual-mode: SDK + CLI)",
   tags: ["provider", "integration"],
+  apiPrefix: API_PREFIX,
+  prerequisites: [
+    {
+      name: CLI_COMMAND,
+      kind: "npm",
+      requiresSudo: false,
+      description: `${DISPLAY_NAME} CLI for CLI mode`,
+    },
+  ],
   providers: { ai: provider },
+  createRoutes: () => createPrereqsRoutes(),
 
   onServerStart(_app, hostServices) {
     if (hostServices) provider.setHostServices(hostServices);
