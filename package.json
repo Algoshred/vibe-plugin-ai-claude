@@ -1,6 +1,6 @@
 {
   "name": "@vibecontrols/vibe-plugin-ai-claude",
-  "version": "2026.509.1",
+  "version": "2026.509.2",
   "type": "module",
   "main": "./dist/index.js",
   "description": "Claude Code AI agent provider for VibeControls Agent",
@@ -28,6 +28,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
+    "@vibecontrols/plugin-sdk": "2026.509.1",
     "elysia": "^1.3.0"
   },
   "devDependencies": {
