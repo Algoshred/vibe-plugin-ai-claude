@@ -41,7 +41,8 @@ mock.module("@anthropic-ai/sdk", () => {
   return { default: MockAnthropic };
 });
 
-const { vibePlugin } = await import("../index.js");
+const { createPlugin } = await import("../index.js");
+const vibePlugin = createPlugin({ name: "test", dataDir: "/tmp" });
 
 // Extract the provider from the plugin
 const provider = vibePlugin.providers!.ai!;
