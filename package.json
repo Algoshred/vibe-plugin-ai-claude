@@ -28,7 +28,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
-    "@vibecontrols/plugin-sdk": "2026.509.1",
+    "@vibecontrols/plugin-sdk": "2026.509.2",
     "elysia": "^1.3.0"
   },
   "devDependencies": {
