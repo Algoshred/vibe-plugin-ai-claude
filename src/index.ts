@@ -507,11 +507,8 @@ class ClaudeCliAdapter implements ProviderAdapter {
     if (config.model) args.push("--model", config.model);
     if (config.maxTokens) args.push("--max-tokens", String(config.maxTokens));
     if (config.systemPrompt) args.push("--system-prompt", config.systemPrompt);
-    // The prompt is delivered on stdin (see sendPrompt), NOT as an argv
-    // positional. Passing it as an argument means a prompt that begins with
-    // "-"/"--" (e.g. a "--- Conversation History ---" preamble) is misparsed
-    // by the claude CLI as an unknown option, and very long multi-turn
-    // histories can blow past ARG_MAX. stdin avoids both.
+    // Prompt delivered on stdin (see sendPrompt) to avoid CLI flag-parsing
+    // issues with leading dashes and ARG_MAX on long histories.
     args.push("--print");
     return args;
   }
