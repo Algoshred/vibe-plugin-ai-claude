@@ -3,7 +3,7 @@
  *
  * Tests for the ClaudeProvider class exported via the vibePlugin.
  */
-import { beforeEach, describe, expect, it, mock } from "bun:test";
+import { beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 
 // Mock @anthropic-ai/sdk before importing the plugin
 mock.module("@anthropic-ai/sdk", () => {
@@ -326,6 +326,56 @@ describe("ClaudeProvider", () => {
       const models2 = await provider.listModels!();
       expect(models1).not.toBe(models2);
       expect(models1).toEqual(models2);
+    });
+  });
+
+  // ── CLI mode prompt delivery (regression) ───────────────────────
+
+  describe("CLI mode prompt delivery", () => {
+    it("delivers the prompt via stdin, never as an argv positional", async () => {
+      provider.setMode!("cli");
+      const session = await provider.createSession({
+        ...sessionConfig,
+        providerConfig: { sessionId: `cli-${Date.now()}` },
+      });
+
+      let captured: { cmd: string[]; stdin: unknown } | null = null;
+      const spawnSpy = spyOn(Bun, "spawn").mockImplementation(((
+        cmd: string[],
+        opts: { stdin?: unknown },
+      ) => {
+        captured = { cmd, stdin: opts?.stdin };
+        return {
+          stdout: new TextEncoder().encode("PONG"),
+          stderr: new TextEncoder().encode(""),
+          exited: Promise.resolve(0),
+        };
+      }) as unknown as typeof Bun.spawn);
+
+      try {
+        // A prompt beginning with "--" used to be misparsed by the claude CLI
+        // as an unknown option because it was passed as an argv positional.
+        const trickyPrompt =
+          "--- Conversation History ---\nhello\n--- End History ---";
+        const res = await provider.sendPrompt(session.id, trickyPrompt);
+
+        expect(res.content).toBe("PONG");
+        expect(captured).not.toBeNull();
+        // print mode is requested via flag...
+        expect(captured!.cmd).toContain("--print");
+        // ...but the prompt text never appears in the argv (would break parsing)
+        expect(
+          captured!.cmd.some((a) => a.includes("Conversation History")),
+        ).toBe(false);
+        // the prompt is delivered on stdin instead
+        const stdinText = new TextDecoder().decode(
+          captured!.stdin as Uint8Array,
+        );
+        expect(stdinText.includes("Conversation History")).toBe(true);
+      } finally {
+        spawnSpy.mockRestore();
+        provider.setMode!("sdk");
+      }
     });
   });
 

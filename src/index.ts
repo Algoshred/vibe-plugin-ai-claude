@@ -261,7 +261,7 @@ function resolveCliBin(): string {
 const CLI_BIN = resolveCliBin();
 
 const DISPLAY_NAME = "Claude";
-const DEFAULT_MODEL = "claude-sonnet-4-20250514";
+const DEFAULT_MODEL = "claude-sonnet-4-6";
 const DEFAULT_MAX_TOKENS = 8192;
 const API_PREFIX = `/api/ai-${PROVIDER_NAME}`;
 const SUPPORTED_MODES: ProviderMode[] = ["sdk", "cli"];
@@ -274,19 +274,19 @@ const CLI_INSTALL_COMMAND = [
 
 const CLAUDE_MODELS: AIModelInfo[] = [
   {
-    id: "claude-sonnet-4-20250514",
-    name: "Claude Sonnet 4",
+    id: "claude-sonnet-4-6",
+    name: "Claude Sonnet 4.6",
     provider: PROVIDER_NAME,
     contextWindow: 200_000,
-    maxOutputTokens: 16_384,
+    maxOutputTokens: 64_000,
     supportsVision: true,
     supportsStreaming: true,
     inputPricePerMToken: 3.0,
     outputPricePerMToken: 15.0,
   },
   {
-    id: "claude-opus-4-20250514",
-    name: "Claude Opus 4",
+    id: "claude-opus-4-7",
+    name: "Claude Opus 4.7",
     provider: PROVIDER_NAME,
     contextWindow: 200_000,
     maxOutputTokens: 32_000,
@@ -502,12 +502,17 @@ class ClaudeSdkAdapter implements ProviderAdapter {
 class ClaudeCliAdapter implements ProviderAdapter {
   readonly mode: ProviderMode = "cli";
 
-  private buildCliArgs(config: AISessionConfig, prompt: string): string[] {
+  private buildCliArgs(config: AISessionConfig): string[] {
     const args: string[] = [];
     if (config.model) args.push("--model", config.model);
     if (config.maxTokens) args.push("--max-tokens", String(config.maxTokens));
     if (config.systemPrompt) args.push("--system-prompt", config.systemPrompt);
-    args.push("--print", prompt);
+    // The prompt is delivered on stdin (see sendPrompt), NOT as an argv
+    // positional. Passing it as an argument means a prompt that begins with
+    // "-"/"--" (e.g. a "--- Conversation History ---" preamble) is misparsed
+    // by the claude CLI as an unknown option, and very long multi-turn
+    // histories can blow past ARG_MAX. stdin avoids both.
+    args.push("--print");
     return args;
   }
 
@@ -523,9 +528,10 @@ class ClaudeCliAdapter implements ProviderAdapter {
     metadata?: Record<string, unknown>;
   }> {
     const startTime = Date.now();
-    const args = this.buildCliArgs(config, prompt);
+    const args = this.buildCliArgs(config);
 
     const proc = Bun.spawn([CLI_BIN, ...args], {
+      stdin: new TextEncoder().encode(prompt),
       stdout: "pipe",
       stderr: "pipe",
       cwd: config.workingDirectory || process.cwd(),
