@@ -389,7 +389,9 @@ describe("ClaudeProvider", () => {
         const session = await provider.createSession({
           ...sessionConfig,
           permissionMode,
-          providerConfig: { sessionId: `cli-pm-${permissionMode}-${Date.now()}` },
+          providerConfig: {
+            sessionId: `cli-pm-${permissionMode}-${Date.now()}`,
+          },
         });
 
         let captured: string[] | null = null;

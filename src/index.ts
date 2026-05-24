@@ -72,7 +72,7 @@ type AILogType =
   | "error"
   | "metadata";
 
-type PermissionMode = "plan" | "acceptEdits" | "fullAuto";
+export type PermissionMode = "plan" | "acceptEdits" | "fullAuto";
 
 interface AISessionConfig {
   name: string;
@@ -506,8 +506,11 @@ class ClaudeSdkAdapter implements ProviderAdapter {
 /**
  * Map the provider-agnostic permission mode to Claude Code CLI flags.
  * Targets the `@anthropic-ai/claude-code` CLI (`claude --help` → --permission-mode:
- * plan | acceptEdits | bypassPermissions). Unknown/undefined falls back to the
- * safe default (acceptEdits) — never the most-permissive level.
+ * plan | acceptEdits | bypassPermissions). `--permission-mode` is supported since
+ * claude-code 0.2.x and is now emitted on every CLI invocation — older installs
+ * that predate the flag would reject it (document/pin the minimum CLI version).
+ * Unknown/undefined falls back to the safe default (acceptEdits) — never the
+ * most-permissive level — and warns so the silent degrade is diagnosable.
  */
 export function permissionFlags(mode: PermissionMode | undefined): string[] {
   switch (mode) {
@@ -516,7 +519,13 @@ export function permissionFlags(mode: PermissionMode | undefined): string[] {
     case "fullAuto":
       return ["--permission-mode", "bypassPermissions"];
     case "acceptEdits":
+      return ["--permission-mode", "acceptEdits"];
     default:
+      if (mode !== undefined) {
+        console.warn(
+          `[claude] Unknown permissionMode "${mode}", falling back to acceptEdits`,
+        );
+      }
       return ["--permission-mode", "acceptEdits"];
   }
 }
