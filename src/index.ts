@@ -72,6 +72,8 @@ type AILogType =
   | "error"
   | "metadata";
 
+export type PermissionMode = "plan" | "acceptEdits" | "fullAuto";
+
 interface AISessionConfig {
   name: string;
   agentType: string;
@@ -80,6 +82,8 @@ interface AISessionConfig {
   temperature?: number;
   systemPrompt?: string;
   workingDirectory?: string;
+  /** Autonomy level for CLI mode; ignored by the SDK adapter. */
+  permissionMode?: PermissionMode;
   providerConfig?: Record<string, unknown>;
 }
 
@@ -499,6 +503,33 @@ class ClaudeSdkAdapter implements ProviderAdapter {
 
 // ── CLI Adapter ─────────────────────────────────────────────────────────
 
+/**
+ * Map the provider-agnostic permission mode to Claude Code CLI flags.
+ * Targets the `@anthropic-ai/claude-code` CLI (`claude --help` → --permission-mode:
+ * plan | acceptEdits | bypassPermissions). `--permission-mode` is supported since
+ * claude-code 0.2.x and is now emitted on every CLI invocation — older installs
+ * that predate the flag would reject it (document/pin the minimum CLI version).
+ * Unknown/undefined falls back to the safe default (acceptEdits) — never the
+ * most-permissive level — and warns so the silent degrade is diagnosable.
+ */
+export function permissionFlags(mode: PermissionMode | undefined): string[] {
+  switch (mode) {
+    case "plan":
+      return ["--permission-mode", "plan"];
+    case "fullAuto":
+      return ["--permission-mode", "bypassPermissions"];
+    case "acceptEdits":
+      return ["--permission-mode", "acceptEdits"];
+    default:
+      if (mode !== undefined) {
+        console.warn(
+          `[claude] Unknown permissionMode "${mode}", falling back to acceptEdits`,
+        );
+      }
+      return ["--permission-mode", "acceptEdits"];
+  }
+}
+
 class ClaudeCliAdapter implements ProviderAdapter {
   readonly mode: ProviderMode = "cli";
 
@@ -507,6 +538,7 @@ class ClaudeCliAdapter implements ProviderAdapter {
     if (config.model) args.push("--model", config.model);
     if (config.maxTokens) args.push("--max-tokens", String(config.maxTokens));
     if (config.systemPrompt) args.push("--system-prompt", config.systemPrompt);
+    args.push(...permissionFlags(config.permissionMode));
     // Prompt delivered on stdin (see sendPrompt) to avoid CLI flag-parsing
     // issues with leading dashes and ARG_MAX on long histories.
     args.push("--print");

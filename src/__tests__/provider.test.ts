@@ -41,7 +41,7 @@ mock.module("@anthropic-ai/sdk", () => {
   return { default: MockAnthropic };
 });
 
-const { createPlugin } = await import("../index.js");
+const { createPlugin, permissionFlags } = await import("../index.js");
 const vibePlugin = createPlugin({ name: "test", dataDir: "/tmp" });
 
 // Extract the provider from the plugin
@@ -377,6 +377,49 @@ describe("ClaudeProvider", () => {
         provider.setMode!("sdk");
       }
     });
+
+    it.each([
+      ["plan", "plan"],
+      ["acceptEdits", "acceptEdits"],
+      ["fullAuto", "bypassPermissions"],
+    ] as const)(
+      "spawns claude with --permission-mode %s → %s",
+      async (permissionMode, expectedFlag) => {
+        provider.setMode!("cli");
+        const session = await provider.createSession({
+          ...sessionConfig,
+          permissionMode,
+          providerConfig: {
+            sessionId: `cli-pm-${permissionMode}-${Date.now()}`,
+          },
+        });
+
+        let captured: string[] | null = null;
+        const spawnSpy = spyOn(Bun, "spawn").mockImplementation(((
+          cmd: string[],
+        ) => {
+          captured = cmd;
+          return {
+            stdout: new TextEncoder().encode("OK"),
+            stderr: new TextEncoder().encode(""),
+            exited: Promise.resolve(0),
+          };
+        }) as unknown as typeof Bun.spawn);
+
+        try {
+          await provider.sendPrompt(session.id, "hello");
+          expect(captured).not.toBeNull();
+          // the exact argv handed to Bun.spawn is what becomes the process
+          // cmdline — assert the permission flag pair is present and adjacent
+          const idx = captured!.indexOf("--permission-mode");
+          expect(idx).toBeGreaterThanOrEqual(0);
+          expect(captured![idx + 1]).toBe(expectedFlag);
+        } finally {
+          spawnSpy.mockRestore();
+          provider.setMode!("sdk");
+        }
+      },
+    );
   });
 
   // ── cancelRequest ───────────────────────────────────────────────
@@ -417,5 +460,37 @@ describe("ClaudeProvider", () => {
         ]),
       ).rejects.toThrow("not found");
     });
+  });
+});
+
+describe("permissionFlags", () => {
+  it("maps plan", () => {
+    expect(permissionFlags("plan")).toEqual(["--permission-mode", "plan"]);
+  });
+
+  it("maps acceptEdits", () => {
+    expect(permissionFlags("acceptEdits")).toEqual([
+      "--permission-mode",
+      "acceptEdits",
+    ]);
+  });
+
+  it("maps fullAuto to bypassPermissions", () => {
+    expect(permissionFlags("fullAuto")).toEqual([
+      "--permission-mode",
+      "bypassPermissions",
+    ]);
+  });
+
+  it("falls back to acceptEdits for undefined / unknown", () => {
+    expect(permissionFlags(undefined)).toEqual([
+      "--permission-mode",
+      "acceptEdits",
+    ]);
+    // unknown string should not throw and should not be the most-permissive
+    expect(permissionFlags("bogus" as never)).toEqual([
+      "--permission-mode",
+      "acceptEdits",
+    ]);
   });
 });
