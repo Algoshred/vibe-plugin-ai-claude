@@ -273,12 +273,7 @@ const DEFAULT_MODEL = "claude-sonnet-4-6";
 const DEFAULT_MAX_TOKENS = 8192;
 const API_PREFIX = `/api/ai-${PROVIDER_NAME}`;
 const SUPPORTED_MODES: ProviderMode[] = ["sdk", "cli"];
-const CLI_INSTALL_COMMAND = [
-  "npm",
-  "install",
-  "-g",
-  "@anthropic-ai/claude-code",
-];
+const CLI_NPM_PACKAGE = "@anthropic-ai/claude-code";
 
 const CLAUDE_MODELS: AIModelInfo[] = [
   {
@@ -1212,6 +1207,45 @@ function getCliVersion(): string | null {
   return null;
 }
 
+/**
+ * Install a global npm CLI, runtime-resiliently. The agent always ships Bun
+ * (it IS a Bun process) but NOT npm/node — the production agent image is Alpine
+ * + Bun only — so a hard-coded `npm install -g` silently fails there. We try
+ * each available global installer in turn and report the last error.
+ */
+function installGlobalNpmCli(pkgSpec: string): {
+  ok: boolean;
+  message: string;
+} {
+  const candidates: string[][] = [
+    ["bun", "install", "-g", pkgSpec],
+    ["npm", "install", "-g", pkgSpec],
+  ];
+  let lastError = "";
+  for (const cmd of candidates) {
+    const exe = cmd[0]!;
+    if (!Bun.which(exe, { PATH: process.env.PATH })) continue;
+    try {
+      const proc = Bun.spawnSync(cmd, {
+        timeout: 180_000,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      if (proc.exitCode === 0) return { ok: true, message: cmd.join(" ") };
+      lastError =
+        proc.stderr.toString().trim() || `${exe} exited ${proc.exitCode}`;
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+    }
+  }
+  return {
+    ok: false,
+    message:
+      lastError ||
+      `No global installer (bun/npm) found. Run manually: bun install -g ${pkgSpec}`,
+  };
+}
+
 function createPrereqsRoutes() {
   return new Elysia({ prefix: "/prereqs" })
     .get("/status", () => {
@@ -1240,12 +1274,8 @@ function createPrereqsRoutes() {
         };
       }
 
-      const proc = Bun.spawnSync(CLI_INSTALL_COMMAND, {
-        timeout: 120_000,
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      if (proc.exitCode === 0) {
+      const result = installGlobalNpmCli(CLI_NPM_PACKAGE);
+      if (result.ok) {
         return {
           ok: true,
           installed: [CLI_COMMAND],
@@ -1257,14 +1287,7 @@ function createPrereqsRoutes() {
         ok: false,
         installed: [],
         pendingSudo: [],
-        errors: [
-          {
-            name: CLI_COMMAND,
-            message:
-              proc.stderr.toString().trim() ||
-              `Run manually: ${CLI_INSTALL_COMMAND.join(" ")}`,
-          },
-        ],
+        errors: [{ name: CLI_COMMAND, message: result.message }],
       };
     });
 }
