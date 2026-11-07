@@ -59,18 +59,9 @@ interface AIFileAttachment {
 }
 
 type AISessionStatus =
-  | "active"
-  | "idle"
-  | "processing"
-  | "error"
-  | "terminated";
+  "active" | "idle" | "processing" | "error" | "terminated";
 type AILogType =
-  | "input"
-  | "output"
-  | "thinking"
-  | "event"
-  | "error"
-  | "metadata";
+  "input" | "output" | "thinking" | "event" | "error" | "metadata";
 
 export type PermissionMode = "plan" | "acceptEdits" | "fullAuto";
 
@@ -334,8 +325,7 @@ interface AnthropicStream {
 }
 
 type ClaudeAuth =
-  | { type: "apiKey"; value: string }
-  | { type: "authToken"; value: string };
+  { type: "apiKey"; value: string } | { type: "authToken"; value: string };
 type ClaudeAuthResolver = () => Promise<ClaudeAuth | undefined>;
 
 class ClaudeSdkAdapter implements ProviderAdapter {
